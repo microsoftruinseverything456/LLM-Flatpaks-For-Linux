@@ -1,6 +1,6 @@
 Three basic unofficial flatpak web apps for Claude, ChatGPT, and Grok. Designed to work with a copilot key in a manner reflective of the design of windows. However, the key must be mapped manually via OS settings. More info at the bottom.
 
-These apps have extremely locked down permissions, and will require adjustments via FlatSeal (or manually) to enable features like sound, microphone, and file system access (drag and drop).
+These apps have extremely locked down permissions and an in-built firewall restricted to solely necessary sites. Adjustments via FlatSeal (or manually) can enable features like sound, microphone, and file system access (drag and drop).
 
 To install FlatSeal for permission adjustments, run "flatpak install flathub com.github.tchx84.Flatseal" without quotes, or find it in the Gnome Software app if applicable.
 

@@ -1,4 +1,4 @@
-Three basic unofficial flatpak web apps for ChatGPT, Claude, and Grok. Designed to work with a copilot key in a manner reflective of the design of windows. However, the key must be mapped manually via OS settings. More info at the bottom.
+Three basic unofficial flatpak web apps for Claude, ChatGPT, and Grok. Designed to work with a copilot key in a manner reflective of the design of windows. However, the key must be mapped manually via OS settings. More info at the bottom.
 
 These apps have extremely locked down permissions, and will require adjustments via FlatSeal (or manually) to enable features like sound, microphone, and file system access (drag and drop).
 

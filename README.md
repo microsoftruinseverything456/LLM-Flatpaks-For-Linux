@@ -1,5 +1,19 @@
 Three basic unofficial flatpak web apps for ChatGPT, Claude, and Grok. Designed to work with a copilot key in a manner reflective of the design of windows. However, the key must be mapped manually via OS settings. 
 
+To map one of these to a copilot key or similar AI keyboard shortcut, add one of the following to the command line for the keyboard shortcut in your OS settings:
+
+Claude:  
+
+/usr/bin/flatpak run --branch=master --arch=x86_64 --command=electron-wrapper --file-forwarding io.github.microsoftruinseverything456.claude @@u %U @@
+
+ChatGPT:  
+
+/usr/bin/flatpak run --branch=master --arch=x86_64 --command=electron-wrapper --file-forwarding io.github.microsoftruinseverything456.chatgpt @@u %U @@
+
+Grok:  
+
+/usr/bin/flatpak run --branch=master --arch=x86_64 --command=electron-wrapper --file-forwarding io.github.microsoftruinseverything456.grok @@u %U @@
+
 These apps have extremely locked down permissions, and will require adjustments via FlatSeal (or manually) to enable features like sound, microphone, and file system access (drag and drop).
 
 To install FlatSeal for permission adjustments, run "flatpak install flathub com.github.tchx84.Flatseal" without quotes, or find it in the Gnome Software app if applicable.

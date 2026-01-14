@@ -1,9 +1,12 @@
-const { app, BrowserWindow, Menu, shell, clipboard, session, Notification } = require('electron');
+// main.js
+const { app, BrowserWindow, shell, clipboard, session, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 let win = null;
-let isWindowCreationStarted = false;
+let creatingPromise = null;
+let networkLockdownInstalled = false;
+let quittingFromGesture = false;
 
 // ---------------- Restore-on-rerun state ----------------
 function stateFilePath() {
@@ -12,11 +15,7 @@ function stateFilePath() {
 
 function writeRestoreUrl(url) {
   try {
-    fs.writeFileSync(
-      stateFilePath(),
-      JSON.stringify({ restoreUrl: url, ts: Date.now() }),
-      'utf8'
-    );
+    fs.writeFileSync(stateFilePath(), JSON.stringify({ restoreUrl: url, ts: Date.now() }), 'utf8');
   } catch {}
 }
 
@@ -56,14 +55,10 @@ function isAllowed(urlString) {
   }
 }
 
-function isHttpUrl(u) {
-  return u.protocol === 'http:' || u.protocol === 'https:';
-}
-
 function shouldOpenExternally(targetUrl) {
   try {
     const u = new URL(targetUrl);
-    if (!isHttpUrl(u)) return false;
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
     return !isAllowed(targetUrl);
   } catch {
     return false;
@@ -81,190 +76,173 @@ function safeGetCurrentUrl() {
   }
 }
 
-// ---------------- URL handler registration ----------------
-if (process.defaultApp) {
-  if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('claude', process.execPath, [path.resolve(process.argv[1])]);
-  }
-} else {
-  app.setAsDefaultProtocolClient('claude');
+// ---------------- Minimal UI: no menus ----------------
+function installNoMenuOnce() {
+  if (installNoMenuOnce.done) return;
+  installNoMenuOnce.done = true;
+
+  // Remove default application menu
+  Menu.setApplicationMenu(null);
+
+  // Ensure any created windows have no menu bar
+  app.on('browser-window-created', (_e, w) => {
+    try {
+      w.setMenu(null);
+      w.setMenuBarVisibility(false);
+      w.setAutoHideMenuBar(true);
+    } catch {}
+  });
 }
 
-// ---------------- Single instance ----------------
-const gotLock = app.requestSingleInstanceLock();
+// ---------------- Network lockdown (once) ----------------
+function installNetworkLockdownOnce() {
+  if (networkLockdownInstalled) return;
+  networkLockdownInstalled = true;
 
-if (!gotLock) {
-  app.exit(0);  // Hard exit for duplicate processes
-} else {
-  app.on('second-instance', (event, commandLine, workingDirectory) => {
-    // Handle URL from command line (when app is already running)
-    const url = commandLine.find(arg => arg.startsWith('claude://') || arg.startsWith('https://claude.ai'));
-    if (url) {
-      const cleanUrl = url.replace('claude://', 'https://claude.ai/');
-      if (win && !win.isDestroyed() && isAllowed(cleanUrl)) {
-        win.loadURL(cleanUrl);
-        if (win.isMinimized()) win.restore();
-        win.focus();
-        return;
-      }
+  const filter = { urls: ['*://*/*'] };
+
+  session.defaultSession.webRequest.onBeforeRequest(filter, (details, cb) => {
+    try {
+      const u = new URL(details.url);
+
+      // Allow non-http(s) internal schemes (devtools, file, etc.)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return cb({ cancel: false });
+
+      if (!isAllowed(details.url)) return cb({ cancel: true });
+      return cb({ cancel: false });
+    } catch {
+      return cb({ cancel: true });
     }
-    if (!win || win.isDestroyed()) return;
+  });
+}
 
-    // If already focused & visible → save current URL + quit (your desired special behavior)
-    if (win.isFocused() && win.isVisible() && !win.isMinimized()) {
-      const url = safeGetCurrentUrl();
-      if (url) {
-        writeRestoreUrl(url);
-      }
+// ---------------- Keyboard shortcuts (no menu needed) ----------------
+function registerWindowShortcuts(w) {
+  if (!w || w.isDestroyed()) return;
+
+  w.webContents.on('before-input-event', (event, input) => {
+    const key = (input.key || '').toLowerCase();
+    const ctrlOrCmd = !!(input.control || input.meta);
+
+    if (ctrlOrCmd && key === 'q') {
+      event.preventDefault();
       app.quit();
       return;
     }
 
-    // Otherwise → bring existing window to front
-    if (win.isMinimized()) win.restore();
-    if (!win.isVisible()) win.show();
-    win.focus();
-
-    // Optional: notification fallback (especially useful on Linux/Wayland)
-    if (Notification.isSupported()) {
-      const n = new Notification({
-        title: 'Claude',
-        body: 'Already running – click to bring it forward'
-      });
-      n.on('click', () => {
-        if (win.isMinimized()) win.restore();
-        win.show();
-        win.focus();
-      });
-      n.show();
-    }
-  });
-
-  function createWindow() {
-    // Strong guard: prevent any parallel creation attempts
-    if (isWindowCreationStarted || (win && !win.isDestroyed())) {
-      if (win && !win.isDestroyed()) {
-        win.focus();
-      }
+    if (ctrlOrCmd && key === 'w') {
+      event.preventDefault();
+      w.close();
       return;
     }
 
-    isWindowCreationStarted = true;
+    if (ctrlOrCmd && !input.shift && key === 'r') {
+      event.preventDefault();
+      w.reload();
+      return;
+    }
+
+    if (ctrlOrCmd && input.shift && key === 'r') {
+      event.preventDefault();
+      w.webContents.reloadIgnoringCache();
+      return;
+    }
+
+    if (ctrlOrCmd && input.shift && key === 'i') {
+      event.preventDefault();
+      w.webContents.toggleDevTools();
+      return;
+    }
+
+    if (input.key === 'F11') {
+      event.preventDefault();
+      w.setFullScreen(!w.isFullScreen());
+      return;
+    }
+  });
+}
+
+// ---------------- Focus helper ----------------
+function focusExistingWindow() {
+  if (!win || win.isDestroyed()) return false;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return true;
+}
+
+// ---------------- Create window (deduped) ----------------
+async function createWindowOnce() {
+  if (focusExistingWindow()) return win;
+  if (creatingPromise) return creatingPromise;
+
+  creatingPromise = (async () => {
+    installNoMenuOnce();
+    installNetworkLockdownOnce();
+
+    const restoreUrl = readRestoreUrl();
+    const startUrl = restoreUrl && isAllowed(restoreUrl) ? restoreUrl : 'https://claude.ai/';
 
     win = new BrowserWindow({
       width: 1200,
       height: 800,
+      show: false,
       webPreferences: {
         nodeIntegration: false,
-        contextIsolation: true
+        contextIsolation: true,
+        sandbox: true
       },
       icon: path.join(__dirname, 'assets/icons/build/icons/64x64.png')
     });
 
-    // Decide startup URL (restore if valid)
-    const restoreUrl = readRestoreUrl();
-    const startUrl =
-      restoreUrl && isAllowed(restoreUrl)
-        ? restoreUrl
-        : 'https://claude.ai/';
+    // Ensure no menu bar
+    win.setMenu(null);
+    win.setMenuBarVisibility(false);
+    win.setAutoHideMenuBar(true);
 
+    // Clear restore file after first definitive load outcome
     if (startUrl !== 'https://claude.ai/') {
       win.webContents.once('did-finish-load', clearRestoreUrl);
       win.webContents.once('did-fail-load', clearRestoreUrl);
     }
 
-    // ---------------- Network lockdown ----------------
-    const filter = { urls: ['*://*/*'] };
+    registerWindowShortcuts(win);
 
-    session.defaultSession.webRequest.onBeforeRequest(filter, (details, cb) => {
-      try {
-        const u = new URL(details.url);
-        if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-          return cb({ cancel: false });
-        }
-        if (!isAllowed(details.url)) {
-          console.log('[BLOCKED]', details.url);
-          return cb({ cancel: true });
-        }
-        return cb({ cancel: false });
-      } catch {
-        return cb({ cancel: true });
-      }
+    win.once('ready-to-show', () => {
+      if (!win || win.isDestroyed()) return;
+      win.show();
+      win.focus();
     });
 
-    // ---------------- Menu ----------------
-    const menu = Menu.buildFromTemplate([
-      {
-        label: 'File',
-        submenu: [
-          { role: 'close', accelerator: 'Ctrl+W' },
-          { role: 'quit', accelerator: 'Ctrl+Q' }
-        ]
-      },
-      {
-        label: 'View',
-        submenu: [
-          { role: 'reload', accelerator: 'Ctrl+R' },
-          { role: 'toggledevtools', accelerator: 'Ctrl+Shift+I' },
-          { type: 'separator' },
-          { role: 'resetzoom' },
-          { role: 'zoomin' },
-          { role: 'zoomout' },
-          { type: 'separator' },
-          { role: 'togglefullscreen', accelerator: 'F11' }
-        ]
-      }
-    ]);
-
-    Menu.setApplicationMenu(menu);
-    win.setMenuBarVisibility(false);
-
-    // ---------------- Context menu ----------------
+    // Minimal context menu (optional)
     win.webContents.on('context-menu', (_e, p) => {
-      const items = [];
-
-      if (p.misspelledWord) {
-        (p.dictionarySuggestions || []).slice(0, 8).forEach(s =>
-          items.push({
-            label: s,
-            click: () => win.webContents.replaceMisspelling(s)
-          })
-        );
-        if (!items.length) items.push({ label: 'No suggestions', enabled: false });
-        items.push({ type: 'separator' });
-      }
-
-      items.push(
+      const template = [
         { label: 'Cut', role: 'cut', enabled: p.isEditable && p.editFlags.canCut },
-        { label: 'Copy', role: 'copy', enabled: p.selectionText?.length },
+        { label: 'Copy', role: 'copy', enabled: !!p.selectionText?.length },
         { label: 'Paste', role: 'paste', enabled: p.isEditable && p.editFlags.canPaste },
         { label: 'Select All', role: 'selectAll' }
-      );
+      ];
 
       if (p.linkURL) {
-        items.push(
+        template.push(
           { type: 'separator' },
-          {
-            label: 'Copy Link Address',
-            click: () => clipboard.writeText(p.linkURL)
-          }
+          { label: 'Copy Link Address', click: () => clipboard.writeText(p.linkURL) }
         );
       }
 
-      Menu.buildFromTemplate(items).popup({ window: win, x: p.x, y: p.y });
+      Menu.buildFromTemplate(template).popup({ window: win, x: p.x, y: p.y });
     });
 
-    // ---------------- Navigation control ----------------
+    // Never open new windows inside Electron; send them to system browser.
     win.webContents.setWindowOpenHandler(({ url }) => {
       try {
         const u = new URL(url);
-        if (u.protocol === 'http:' || u.protocol === 'https:') {
-          shell.openExternal(url);
-        }
+        if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(url);
       } catch {}
       return { action: 'deny' };
     });
 
+    // Keep in-app navigation only to allowed domains.
     win.webContents.on('will-navigate', (e, url) => {
       if (shouldOpenExternally(url)) {
         e.preventDefault();
@@ -279,49 +257,59 @@ if (!gotLock) {
       }
     });
 
-    win.loadURL(startUrl);
+    await win.loadURL(startUrl);
 
     win.on('closed', () => {
       win = null;
-      isWindowCreationStarted = false;
+      creatingPromise = null;
     });
-  }
 
-  app.whenReady().then(() => {
-    createWindow();
-    
-    // Handle URL if app was launched with one
-    const url = process.argv.find(arg => arg.startsWith('claude://') || arg.startsWith('https://claude.ai'));
-    if (url) {
-      const cleanUrl = url.replace('claude://', 'https://claude.ai/');
-      if (win && !win.isDestroyed() && isAllowed(cleanUrl)) {
-        win.loadURL(cleanUrl);
-      }
+    return win;
+  })();
+
+  try {
+    return await creatingPromise;
+  } catch (e) {
+    creatingPromise = null;
+    throw e;
+  }
+}
+
+// ---------------- Single instance lock ----------------
+const gotLock = app.requestSingleInstanceLock();
+
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on('second-instance', async () => {
+    // If we’re already in the middle of quitting from the gesture,
+    // do nothing (keeps behavior stable).
+    if (quittingFromGesture) return;
+
+    // If focused/visible, interpret as rerun gesture: save URL + quit.
+    if (win && !win.isDestroyed() && win.isVisible() && win.isFocused() && !win.isMinimized()) {
+      const url = safeGetCurrentUrl();
+      if (url) writeRestoreUrl(url);
+
+      quittingFromGesture = true;
+      app.quit();
+      return;
     }
+
+    // Otherwise, focus or create.
+    await createWindowOnce();
   });
 
-  // macOS URL handler
-  app.on('open-url', (event, url) => {
-    event.preventDefault();
-    const cleanUrl = url.replace('claude://', 'https://claude.ai/');
-    if (isAllowed(cleanUrl)) {
-      if (win && !win.isDestroyed()) {
-        win.loadURL(cleanUrl);
-        if (win.isMinimized()) win.restore();
-        win.focus();
-      }
-    }
+  app.whenReady().then(() => {
+    createWindowOnce();
+  });
+
+  // macOS dock click should focus or recreate
+  app.on('activate', () => {
+    createWindowOnce();
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
-    }
-  });
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    app.quit();
   });
 }

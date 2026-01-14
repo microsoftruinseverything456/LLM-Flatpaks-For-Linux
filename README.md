@@ -4,6 +4,6 @@ These apps have extremely locked down permissions, and will require adjustments 
 
 To install FlatSeal for permission adjustments, run "flatpak install flathub com.github.tchx84.Flatseal" without quotes, or find it in the Gnome Software app if applicable.
 
-To update, run the uninstall.sh first to remove the app you're going to update, then run the install.sh. 
+Scripts included for installations, removals, and updates.
 
 This is not (yet) available on Flathub. I'm still somewhat new to the Linux scene, and haven't gotten around to registering these with Gnome.

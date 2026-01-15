@@ -141,12 +141,21 @@ function installNetworkLockdownOnce() {
 }
 
 // ---------------- Keyboard shortcuts (no menu needed) ----------------
+let lastFocusAt = 0;
 function registerWindowShortcuts(w) {
+  // Convoluted fix for ctrl+w transferring from other windows
   if (!w || w.isDestroyed()) return;
-
+  w.on('focus', () => { lastFocusAt = Date.now(); });
   w.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return;
+    const fw = BrowserWindow.getFocusedWindow();
+    if (!fw || fw.id !== w.id) return;
     const key = (input.key || '').toLowerCase();
     const ctrlOrCmd = !!(input.control || input.meta);
+    if (ctrlOrCmd && (key === 'w' || key === 'q')) {
+      const msSinceFocus = Date.now() - lastFocusAt;
+      if (msSinceFocus >= 0 && msSinceFocus < 250) return;
+    }
 
     if (ctrlOrCmd && key === 'q') {
       event.preventDefault();
@@ -203,12 +212,9 @@ async function createWindowOnce() {
   creatingPromise = (async () => {
     installNoMenuOnce();
     installNetworkLockdownOnce();
-
-    // Optional: pick a language list (or omit to use OS defaults)
     try {
       session.defaultSession.setSpellCheckerLanguages(['en-US']);
     } catch {}
-
     const restoreUrl = readRestoreUrl();
     const startUrl = restoreUrl && isAllowed(restoreUrl) ? restoreUrl : 'https://claude.ai/';
 
@@ -220,7 +226,6 @@ async function createWindowOnce() {
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,
-        // enable spellchecker so misspelling suggestions appear in context-menu params
         spellcheck: true
       },
       icon: path.join(__dirname, 'assets/icons/build/icons/64x64.png')
@@ -246,13 +251,10 @@ async function createWindowOnce() {
     });
 
     // Context menu:
-    // - spell corrections when right-clicking a misspelled word
-    // - minimal edit actions
     win.webContents.on('context-menu', (_e, p) => {
       const template = [];
 
       // --- Spellcheck suggestions (when right-clicking a misspelled word) ---
-      // Electron provides `misspelledWord` and `dictionarySuggestions` in `p`
       const misspelled = typeof p.misspelledWord === 'string' ? p.misspelledWord : '';
       const suggestions = Array.isArray(p.dictionarySuggestions) ? p.dictionarySuggestions : [];
 

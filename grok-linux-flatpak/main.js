@@ -1,18 +1,12 @@
-const { app, BrowserWindow, shell, clipboard, session, Notification, Menu } = require('electron');
+// main.js
+const { app, BrowserWindow, shell, clipboard, session, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 
 let win = null;
-
-// Strong “don’t open multiple windows” guards
-let creatingPromise = null;          // in-flight creation promise (dedupes rapid calls)
-let isWindowCreationStarted = false; // belt + suspenders
+let creatingPromise = null;
 let networkLockdownInstalled = false;
-
-// Rerun / exit-gate state
-let isRelaunching = false;
-const RELAUNCH_GRACE_MS = 6000;
+let quittingFromGesture = false;
 
 // ---------------- Restore-on-rerun state ----------------
 function stateFilePath() {
@@ -39,84 +33,6 @@ function clearRestoreUrl() {
   try {
     fs.unlinkSync(stateFilePath());
   } catch {}
-}
-
-// ---------------- Exit gate token (one-shot) ----------------
-function relaunchTokenFilePath() {
-  return path.join(app.getPath('userData'), 'relaunch-token.json');
-}
-
-function writeRelaunchToken(data) {
-  try {
-    const payload =
-      typeof data === 'string'
-        ? { token: data, ts: Date.now(), allowedLaunches: 0 }
-        : { token: data.token, ts: Date.now(), allowedLaunches: data.allowedLaunches ?? 0 };
-
-    fs.writeFileSync(relaunchTokenFilePath(), JSON.stringify(payload), 'utf8');
-  } catch {}
-}
-
-function readRelaunchToken() {
-  try {
-    const raw = fs.readFileSync(relaunchTokenFilePath(), 'utf8');
-    const data = JSON.parse(raw);
-    if (!data || typeof data.token !== 'string' || typeof data.ts !== 'number') return null;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-function clearRelaunchToken() {
-  try {
-    fs.unlinkSync(relaunchTokenFilePath());
-  } catch {}
-}
-
-function consumeOneAllowedLaunchIfPresent() {
-  const info = readRelaunchToken();
-  if (!info) return false;
-
-  const age = Date.now() - info.ts;
-  if (age > RELAUNCH_GRACE_MS) {
-    clearRelaunchToken();
-    return false;
-  }
-
-  if ((info.allowedLaunches ?? 0) <= 0) return false;
-
-  try {
-    fs.writeFileSync(
-      relaunchTokenFilePath(),
-      JSON.stringify({ ...info, allowedLaunches: (info.allowedLaunches ?? 0) - 1 }),
-      'utf8'
-    );
-  } catch {}
-
-  return true;
-}
-
-// Gate rule:
-// - If token is fresh AND allowedLaunches > 0: allow exactly one launch through (consume it)
-// - Otherwise, if token is fresh: block launch (prevents multi-window spam during shutdown)
-// - If token stale: clear it and allow
-function shouldBlockThisLaunchDueToExitGate() {
-  const info = readRelaunchToken();
-  if (!info) return false;
-
-  const age = Date.now() - info.ts;
-  if (age > RELAUNCH_GRACE_MS) {
-    clearRelaunchToken();
-    return false;
-  }
-
-  if ((info.allowedLaunches ?? 0) > 0) {
-    consumeOneAllowedLaunchIfPresent();
-    return false;
-  }
-
-  return true;
 }
 
 // ---------------- Domain policy ----------------
@@ -162,36 +78,34 @@ function safeGetCurrentUrl() {
   }
 }
 
-// ---------------- Focus / bring-forward helpers ----------------
-function focusExistingWindow() {
-  if (!win || win.isDestroyed()) return false;
-
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
-
-  return true;
+// ---------------- Terminal-only logging helper ----------------
+function logIfTerminal(msg) {
+  try {
+    if (process?.stdout?.isTTY) console.log(msg);
+  } catch {}
 }
 
-function notifyBringForward() {
-  if (!Notification.isSupported() || !win || win.isDestroyed()) return;
-
-  const n = new Notification({
-    title: 'Grok',
-    body: 'Already running — click to bring it forward'
-  });
-
-  n.on('click', () => focusExistingWindow());
-  n.show();
+function logBlockedUrl(detailsUrl, why = '') {
+  try {
+    if (!process?.stdout?.isTTY) return;
+    const u = new URL(detailsUrl);
+    const reason = why ? ` (${why})` : '';
+    console.log(`[blocked] ${u.origin}${u.pathname}${u.search}${reason}`);
+  } catch {
+    // If URL parsing fails, still log raw
+    logIfTerminal(`[blocked] ${String(detailsUrl)}`);
+  }
 }
 
-// ---------------- Remove menus (keyboard shortcuts only) ----------------
+// ---------------- Minimal UI: no menus ----------------
 function installNoMenuOnce() {
   if (installNoMenuOnce.done) return;
   installNoMenuOnce.done = true;
 
+  // Remove default application menu
   Menu.setApplicationMenu(null);
 
+  // Ensure any created windows have no menu bar
   app.on('browser-window-created', (_e, w) => {
     try {
       w.setMenu(null);
@@ -201,7 +115,7 @@ function installNoMenuOnce() {
   });
 }
 
-// ---------------- Network lockdown (install once per app lifetime) ----------------
+// ---------------- Network lockdown (once) ----------------
 function installNetworkLockdownOnce() {
   if (networkLockdownInstalled) return;
   networkLockdownInstalled = true;
@@ -212,21 +126,23 @@ function installNetworkLockdownOnce() {
     try {
       const u = new URL(details.url);
 
+      // Allow non-http(s) internal schemes (devtools, file, etc.)
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return cb({ cancel: false });
 
       if (!isAllowed(details.url)) {
-        console.log('[BLOCKED]', details.url);
+        logBlockedUrl(details.url, 'domain not allowed');
         return cb({ cancel: true });
       }
 
       return cb({ cancel: false });
     } catch {
+      logBlockedUrl(details.url, 'invalid url');
       return cb({ cancel: true });
     }
   });
 }
 
-// ---------------- Window-scoped keyboard shortcuts (no app menu needed) ----------------
+// ---------------- Keyboard shortcuts (no menu needed) ----------------
 function registerWindowShortcuts(w) {
   if (!w || w.isDestroyed()) return;
 
@@ -272,35 +188,28 @@ function registerWindowShortcuts(w) {
   });
 }
 
-// Focused relaunch gesture: save URL + quit (no reopen)
-// Gate allows exactly one subsequent launch through (and blocks spam).
-function saveUrlAndExitWithGate() {
-  if (isRelaunching) return;
-  isRelaunching = true;
-
-  const url = safeGetCurrentUrl();
-  if (url) writeRestoreUrl(url);
-
-  writeRelaunchToken({
-    token: crypto.randomBytes(16).toString('hex'),
-    allowedLaunches: 1
-  });
-
-  // Short delay so the just-launched process fails to take over as primary.
-  setTimeout(() => app.exit(0), 600);
+// ---------------- Focus helper ----------------
+function focusExistingWindow() {
+  if (!win || win.isDestroyed()) return false;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return true;
 }
 
-// ---------------- Create (exactly one) window, safely ----------------
+// ---------------- Create window (deduped) ----------------
 async function createWindowOnce() {
   if (focusExistingWindow()) return win;
   if (creatingPromise) return creatingPromise;
-  if (isWindowCreationStarted) return creatingPromise;
-
-  isWindowCreationStarted = true;
 
   creatingPromise = (async () => {
     installNoMenuOnce();
     installNetworkLockdownOnce();
+
+    // Optional: pick a language list (or omit to use OS defaults)
+    try {
+      session.defaultSession.setSpellCheckerLanguages(['en-US']);
+    } catch {}
 
     const restoreUrl = readRestoreUrl();
     const startUrl = restoreUrl && isAllowed(restoreUrl) ? restoreUrl : 'https://grok.com/';
@@ -312,15 +221,19 @@ async function createWindowOnce() {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        sandbox: true
+        sandbox: true,
+        // enable spellchecker so misspelling suggestions appear in context-menu params
+        spellcheck: true
       },
       icon: path.join(__dirname, 'assets/icons/build/icons/64x64.png')
     });
 
+    // Ensure no menu bar
     win.setMenu(null);
     win.setMenuBarVisibility(false);
     win.setAutoHideMenuBar(true);
 
+    // Clear restore file after first definitive load outcome
     if (startUrl !== 'https://grok.com/') {
       win.webContents.once('did-finish-load', clearRestoreUrl);
       win.webContents.once('did-fail-load', clearRestoreUrl);
@@ -330,21 +243,55 @@ async function createWindowOnce() {
 
     win.once('ready-to-show', () => {
       if (!win || win.isDestroyed()) return;
-
-      // Once UI is up, end any lingering gate.
-      clearRelaunchToken();
-
       win.show();
       win.focus();
     });
 
+    // Context menu:
+    // - spell corrections when right-clicking a misspelled word
+    // - minimal edit actions
     win.webContents.on('context-menu', (_e, p) => {
-      const template = [
+      const template = [];
+
+      // --- Spellcheck suggestions (when right-clicking a misspelled word) ---
+      // Electron provides `misspelledWord` and `dictionarySuggestions` in `p`
+      const misspelled = typeof p.misspelledWord === 'string' ? p.misspelledWord : '';
+      const suggestions = Array.isArray(p.dictionarySuggestions) ? p.dictionarySuggestions : [];
+
+      if (misspelled && suggestions.length) {
+        // add up to 8 suggestions to keep it tidy
+        suggestions.slice(0, 8).forEach((s) => {
+          template.push({
+            label: s,
+            click: () => {
+              try {
+                if (win && !win.isDestroyed()) win.webContents.replaceMisspelling(s);
+              } catch {}
+            }
+          });
+        });
+
+        template.push({ type: 'separator' });
+
+        template.push({
+          label: 'Add to Dictionary',
+          click: () => {
+            try {
+              session.defaultSession.addWordToSpellCheckerDictionary(misspelled);
+            } catch {}
+          }
+        });
+
+        template.push({ type: 'separator' });
+      }
+
+      // --- Minimal edit menu ---
+      template.push(
         { label: 'Cut', role: 'cut', enabled: p.isEditable && p.editFlags.canCut },
         { label: 'Copy', role: 'copy', enabled: !!p.selectionText?.length },
         { label: 'Paste', role: 'paste', enabled: p.isEditable && p.editFlags.canPaste },
         { label: 'Select All', role: 'selectAll' }
-      ];
+      );
 
       if (p.linkURL) {
         template.push(
@@ -356,6 +303,7 @@ async function createWindowOnce() {
       Menu.buildFromTemplate(template).popup({ window: win, x: p.x, y: p.y });
     });
 
+    // Never open new windows inside Electron; send them to system browser.
     win.webContents.setWindowOpenHandler(({ url }) => {
       try {
         const u = new URL(url);
@@ -364,6 +312,7 @@ async function createWindowOnce() {
       return { action: 'deny' };
     });
 
+    // Keep in-app navigation only to allowed domains.
     win.webContents.on('will-navigate', (e, url) => {
       if (shouldOpenExternally(url)) {
         e.preventDefault();
@@ -383,7 +332,6 @@ async function createWindowOnce() {
     win.on('closed', () => {
       win = null;
       creatingPromise = null;
-      isWindowCreationStarted = false;
     });
 
     return win;
@@ -391,16 +339,10 @@ async function createWindowOnce() {
 
   try {
     return await creatingPromise;
-  } catch (err) {
+  } catch (e) {
     creatingPromise = null;
-    isWindowCreationStarted = false;
-    throw err;
+    throw e;
   }
-}
-
-// ---------------- Startup gate (one-shot) ----------------
-if (shouldBlockThisLaunchDueToExitGate()) {
-  app.exit(0);
 }
 
 // ---------------- Single instance lock ----------------
@@ -410,20 +352,29 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', async () => {
-    // If focused/visible, interpret as rerun gesture: save URL + quit (no reopen)
+    // If we’re already in the middle of quitting from the gesture,
+    // do nothing (keeps behavior stable).
+    if (quittingFromGesture) return;
+
+    // If focused/visible, interpret as rerun gesture: save URL + quit.
     if (win && !win.isDestroyed() && win.isVisible() && win.isFocused() && !win.isMinimized()) {
-      saveUrlAndExitWithGate();
+      const url = safeGetCurrentUrl();
+      if (url) writeRestoreUrl(url);
+
+      quittingFromGesture = true;
+      app.quit();
       return;
     }
 
+    // Otherwise, focus or create.
     await createWindowOnce();
-    notifyBringForward();
   });
 
   app.whenReady().then(() => {
     createWindowOnce();
   });
 
+  // macOS dock click should focus or recreate
   app.on('activate', () => {
     createWindowOnce();
   });

@@ -76,6 +76,25 @@ function safeGetCurrentUrl() {
   }
 }
 
+// ---------------- Terminal-only logging helper ----------------
+function logIfTerminal(msg) {
+  try {
+    if (process?.stdout?.isTTY) console.log(msg);
+  } catch {}
+}
+
+function logBlockedUrl(detailsUrl, why = '') {
+  try {
+    if (!process?.stdout?.isTTY) return;
+    const u = new URL(detailsUrl);
+    const reason = why ? ` (${why})` : '';
+    console.log(`[blocked] ${u.origin}${u.pathname}${u.search}${reason}`);
+  } catch {
+    // If URL parsing fails, still log raw
+    logIfTerminal(`[blocked] ${String(detailsUrl)}`);
+  }
+}
+
 // ---------------- Minimal UI: no menus ----------------
 function installNoMenuOnce() {
   if (installNoMenuOnce.done) return;
@@ -108,9 +127,14 @@ function installNetworkLockdownOnce() {
       // Allow non-http(s) internal schemes (devtools, file, etc.)
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return cb({ cancel: false });
 
-      if (!isAllowed(details.url)) return cb({ cancel: true });
+      if (!isAllowed(details.url)) {
+        logBlockedUrl(details.url, 'domain not allowed');
+        return cb({ cancel: true });
+      }
+
       return cb({ cancel: false });
     } catch {
+      logBlockedUrl(details.url, 'invalid url');
       return cb({ cancel: true });
     }
   });
@@ -180,6 +204,11 @@ async function createWindowOnce() {
     installNoMenuOnce();
     installNetworkLockdownOnce();
 
+    // Optional: pick a language list (or omit to use OS defaults)
+    try {
+      session.defaultSession.setSpellCheckerLanguages(['en-US']);
+    } catch {}
+
     const restoreUrl = readRestoreUrl();
     const startUrl = restoreUrl && isAllowed(restoreUrl) ? restoreUrl : 'https://claude.ai/';
 
@@ -190,7 +219,9 @@ async function createWindowOnce() {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        sandbox: true
+        sandbox: true,
+        // enable spellchecker so misspelling suggestions appear in context-menu params
+        spellcheck: true
       },
       icon: path.join(__dirname, 'assets/icons/build/icons/64x64.png')
     });
@@ -214,14 +245,51 @@ async function createWindowOnce() {
       win.focus();
     });
 
-    // Minimal context menu (optional)
+    // Context menu:
+    // - spell corrections when right-clicking a misspelled word
+    // - minimal edit actions
     win.webContents.on('context-menu', (_e, p) => {
-      const template = [
+      const template = [];
+
+      // --- Spellcheck suggestions (when right-clicking a misspelled word) ---
+      // Electron provides `misspelledWord` and `dictionarySuggestions` in `p`
+      const misspelled = typeof p.misspelledWord === 'string' ? p.misspelledWord : '';
+      const suggestions = Array.isArray(p.dictionarySuggestions) ? p.dictionarySuggestions : [];
+
+      if (misspelled && suggestions.length) {
+        // add up to 8 suggestions to keep it tidy
+        suggestions.slice(0, 8).forEach((s) => {
+          template.push({
+            label: s,
+            click: () => {
+              try {
+                if (win && !win.isDestroyed()) win.webContents.replaceMisspelling(s);
+              } catch {}
+            }
+          });
+        });
+
+        template.push({ type: 'separator' });
+
+        template.push({
+          label: 'Add to Dictionary',
+          click: () => {
+            try {
+              session.defaultSession.addWordToSpellCheckerDictionary(misspelled);
+            } catch {}
+          }
+        });
+
+        template.push({ type: 'separator' });
+      }
+
+      // --- Minimal edit menu ---
+      template.push(
         { label: 'Cut', role: 'cut', enabled: p.isEditable && p.editFlags.canCut },
         { label: 'Copy', role: 'copy', enabled: !!p.selectionText?.length },
         { label: 'Paste', role: 'paste', enabled: p.isEditable && p.editFlags.canPaste },
         { label: 'Select All', role: 'selectAll' }
-      ];
+      );
 
       if (p.linkURL) {
         template.push(

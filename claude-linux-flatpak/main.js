@@ -6,7 +6,6 @@ const fs = require('fs');
 let win = null;
 let creatingPromise = null;
 let networkLockdownInstalled = false;
-let quittingFromGesture = false;
 
 // ---------------- Restore-on-rerun state ----------------
 function stateFilePath() {
@@ -198,11 +197,21 @@ function registerWindowShortcuts(w) {
 // ---------------- Focus helper ----------------
 function focusExistingWindow() {
   if (!win || win.isDestroyed()) return false;
+
+  try {
+    // If we previously hid it, put it back in the taskbar and show it.
+    win.setSkipTaskbar(false);
+    if (!win.isVisible()) win.show();
+  } catch {}
+
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
   return true;
 }
+
+// ---------------- Create window (deduped) ----------------
+let hidingToBackground = false;
 
 // ---------------- Create window (deduped) ----------------
 async function createWindowOnce() {
@@ -212,11 +221,16 @@ async function createWindowOnce() {
   creatingPromise = (async () => {
     installNoMenuOnce();
     installNetworkLockdownOnce();
+
     try {
       session.defaultSession.setSpellCheckerLanguages(['en-US']);
     } catch {}
+
     const restoreUrl = readRestoreUrl();
-    const startUrl = restoreUrl && isAllowed(restoreUrl) ? restoreUrl : 'https://claude.ai/';
+    const startUrl =
+      restoreUrl && isAllowed(restoreUrl)
+        ? restoreUrl
+        : 'https://claude.ai/';
 
     win = new BrowserWindow({
       width: 1200,
@@ -231,41 +245,110 @@ async function createWindowOnce() {
       icon: path.join(__dirname, 'assets/icons/build/icons/64x64.png')
     });
 
-    // Ensure no menu bar
+    // No menu bar
     win.setMenu(null);
     win.setMenuBarVisibility(false);
     win.setAutoHideMenuBar(true);
 
-    // Clear restore file after first definitive load outcome
+    // Any real close = hard reset (no restore next launch)
+    win.on('close', () => {
+      clearRestoreUrl();
+    });
+
+    // If we restored, clear marker once load outcome is known
     if (startUrl !== 'https://claude.ai/') {
       win.webContents.once('did-finish-load', clearRestoreUrl);
       win.webContents.once('did-fail-load', clearRestoreUrl);
     }
 
-    registerWindowShortcuts(win);
+    // Keyboard shortcuts
+    let lastFocusAt = 0;
+    win.on('focus', () => {
+      lastFocusAt = Date.now();
+    });
+
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return;
+
+      const fw = BrowserWindow.getFocusedWindow();
+      if (!fw || fw.id !== win.id) return;
+
+      const key = (input.key || '').toLowerCase();
+      const ctrlOrCmd = !!(input.control || input.meta);
+
+      // Prevent cross-window Ctrl+W/Q bleed
+      if (ctrlOrCmd && (key === 'w' || key === 'q')) {
+        const msSinceFocus = Date.now() - lastFocusAt;
+        if (msSinceFocus >= 0 && msSinceFocus < 250) return;
+      }
+
+      // Ctrl+Q = quit + reset
+      if (ctrlOrCmd && key === 'q') {
+        event.preventDefault();
+        clearRestoreUrl();
+        app.quit();
+        return;
+      }
+
+      // Ctrl+W = same as Ctrl+Q
+      if (ctrlOrCmd && key === 'w') {
+        event.preventDefault();
+        clearRestoreUrl();
+        app.quit();
+        return;
+      }
+
+      if (ctrlOrCmd && !input.shift && key === 'r') {
+        event.preventDefault();
+        win.reload();
+        return;
+      }
+
+      if (ctrlOrCmd && input.shift && key === 'r') {
+        event.preventDefault();
+        win.webContents.reloadIgnoringCache();
+        return;
+      }
+
+      if (ctrlOrCmd && input.shift && key === 'i') {
+        event.preventDefault();
+        win.webContents.toggleDevTools();
+        return;
+      }
+
+      if (input.key === 'F11') {
+        event.preventDefault();
+        win.setFullScreen(!win.isFullScreen());
+        return;
+      }
+    });
 
     win.once('ready-to-show', () => {
       if (!win || win.isDestroyed()) return;
+      win.setSkipTaskbar(false);
       win.show();
       win.focus();
     });
 
-    // Context menu:
+    // Context menu (unchanged)
     win.webContents.on('context-menu', (_e, p) => {
       const template = [];
 
-      // --- Spellcheck suggestions (when right-clicking a misspelled word) ---
-      const misspelled = typeof p.misspelledWord === 'string' ? p.misspelledWord : '';
-      const suggestions = Array.isArray(p.dictionarySuggestions) ? p.dictionarySuggestions : [];
+      const misspelled =
+        typeof p.misspelledWord === 'string' ? p.misspelledWord : '';
+      const suggestions = Array.isArray(p.dictionarySuggestions)
+        ? p.dictionarySuggestions
+        : [];
 
       if (misspelled && suggestions.length) {
-        // add up to 8 suggestions to keep it tidy
         suggestions.slice(0, 8).forEach((s) => {
           template.push({
             label: s,
             click: () => {
               try {
-                if (win && !win.isDestroyed()) win.webContents.replaceMisspelling(s);
+                if (win && !win.isDestroyed()) {
+                  win.webContents.replaceMisspelling(s);
+                }
               } catch {}
             }
           });
@@ -277,7 +360,9 @@ async function createWindowOnce() {
           label: 'Add to Dictionary',
           click: () => {
             try {
-              session.defaultSession.addWordToSpellCheckerDictionary(misspelled);
+              session.defaultSession.addWordToSpellCheckerDictionary(
+                misspelled
+              );
             } catch {}
           }
         });
@@ -285,34 +370,45 @@ async function createWindowOnce() {
         template.push({ type: 'separator' });
       }
 
-      // --- Minimal edit menu ---
       template.push(
         { label: 'Cut', role: 'cut', enabled: p.isEditable && p.editFlags.canCut },
         { label: 'Copy', role: 'copy', enabled: !!p.selectionText?.length },
-        { label: 'Paste', role: 'paste', enabled: p.isEditable && p.editFlags.canPaste },
+        {
+          label: 'Paste',
+          role: 'paste',
+          enabled: p.isEditable && p.editFlags.canPaste
+        },
         { label: 'Select All', role: 'selectAll' }
       );
 
       if (p.linkURL) {
         template.push(
           { type: 'separator' },
-          { label: 'Copy Link Address', click: () => clipboard.writeText(p.linkURL) }
+          {
+            label: 'Copy Link Address',
+            click: () => clipboard.writeText(p.linkURL)
+          }
         );
       }
 
-      Menu.buildFromTemplate(template).popup({ window: win, x: p.x, y: p.y });
+      Menu.buildFromTemplate(template).popup({
+        window: win,
+        x: p.x,
+        y: p.y
+      });
     });
 
-    // Never open new windows inside Electron; send them to system browser.
+    // External navigation handling
     win.webContents.setWindowOpenHandler(({ url }) => {
       try {
         const u = new URL(url);
-        if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(url);
+        if (u.protocol === 'http:' || u.protocol === 'https:') {
+          shell.openExternal(url);
+        }
       } catch {}
       return { action: 'deny' };
     });
 
-    // Keep in-app navigation only to allowed domains.
     win.webContents.on('will-navigate', (e, url) => {
       if (shouldOpenExternally(url)) {
         e.preventDefault();
@@ -352,21 +448,22 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', async () => {
-    // If we’re already in the middle of quitting from the gesture,
-    // do nothing (keeps behavior stable).
-    if (quittingFromGesture) return;
-
-    // If focused/visible, interpret as rerun gesture: save URL + quit.
+    // If focused/visible, interpret as “hide-to-background” gesture.
     if (win && !win.isDestroyed() && win.isVisible() && win.isFocused() && !win.isMinimized()) {
       const url = safeGetCurrentUrl();
-      if (url) writeRestoreUrl(url);
+      if (url) writeRestoreUrl(url); // optional; keep if you still like crash-safe restore
 
-      quittingFromGesture = true;
-      app.quit();
+      try {
+        // Make it truly “disappear” (no taskbar entry) while still running.
+        win.setSkipTaskbar(true);
+        win.hide();
+        win.blur();
+      } catch {}
+
       return;
     }
 
-    // Otherwise, focus or create.
+    // Otherwise, focus existing or create.
     await createWindowOnce();
   });
 

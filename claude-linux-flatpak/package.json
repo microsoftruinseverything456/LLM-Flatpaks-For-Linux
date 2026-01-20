@@ -1,6 +1,6 @@
 {
   "name": "Claude",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "Unofficial Claude for Linux",
   "main": "main.js",
   "scripts": {
@@ -42,5 +42,9 @@
   "devDependencies": {
     "electron": "^37.4.0",
     "electron-builder": "^26.0.12"
+  },
+  "overrides": {
+    "tar": "^7.5.4",
+    "@electron/rebuild": "3.7.2"
   }
 }

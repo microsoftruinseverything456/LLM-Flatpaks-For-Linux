@@ -1,0 +1,50 @@
+{
+  "name": "Lumo",
+  "version": "2.1.0",
+  "description": "Unofficial Lumo for Linux",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "image": "npx electron-icon-builder --input=assets/icons/icon.png --output=assets/icons/build --flatten",
+    "build": "npx electron-builder",
+    "build-deb": "npx electron-builder --linux deb",
+    "build-flatpak": "npx electron-builder --linux flatpak"
+  },
+  "build": {
+    "appId": "io.github.microsoftruinseverything456.lumo",
+    "productName": "Lumo",
+    "icon": "icon",
+    "linux": {
+      "target": [
+        "deb",
+        "flatpak"
+      ],
+      "icon": "512x512.png",
+      "category": "Utility"
+    },
+    "flatpak": {
+      "base": "org.electronjs.Electron2.BaseApp",
+      "baseVersion": "25.08",
+      "runtime": "org.freedesktop.Platform",
+      "runtimeVersion": "25.08",
+      "sdk": "org.freedesktop.Sdk",
+      "useWaylandFlags": true,
+      "finishArgs": [
+        "--unshare=ipc",
+        "--share=network",
+        "--socket=wayland",
+        "--socket=fallback-x11",
+        "--device=dri"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.4.0",
+    "electron-builder": "^26.5.0"
+  },
+  "overrides": {
+    "tar": "^7.5.4",
+    "@electron/rebuild": "3.7.2"
+  }
+}

@@ -26,3 +26,7 @@ ChatGPT:
 Grok:  
 
 /usr/bin/flatpak run --branch=master --arch=x86_64 --command=electron-wrapper --file-forwarding io.github.microsoftruinseverything456.grok @@u %U @@
+
+Lumo:
+
+/usr/bin/flatpak run --branch=master --arch=x86_64 --command=electron-wrapper --file-forwarding io.github.microsoftruinseverything456.lumo @@u %U @@

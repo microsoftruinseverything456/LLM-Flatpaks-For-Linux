@@ -1,6 +1,6 @@
 {
   "name": "Grok",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Unofficial Grok for Linux",
   "main": "main.js",
   "scripts": {
@@ -40,11 +40,13 @@
     }
   },
   "devDependencies": {
-    "electron": "^37.4.0",
-    "electron-builder": "^26.0.12"
+    "electron": "latest",
+    "electron-builder": "latest"
   },
   "overrides": {
-    "tar": "^7.5.4",
-    "@electron/rebuild": "3.7.2"
+    "tar": "*",
+    "@tootallnate/once": "*",
+    "http-proxy-agent": "*",
+    "@electron/rebuild": "*"
   }
 }

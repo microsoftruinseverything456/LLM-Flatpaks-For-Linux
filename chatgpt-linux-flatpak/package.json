@@ -1,7 +1,7 @@
 {
   "name": "ChatGPT",
-  "version": "2.1.0",
-  "description": "Unofficial OpenAI ChatGPT for Linux",
+  "version": "2.1.1",
+  "description": "Unofficial ChatGPT for Linux",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -40,11 +40,13 @@
     }
   },
   "devDependencies": {
-    "electron": "^37.4.0",
-    "electron-builder": "^26.5.0"
+    "electron": "latest",
+    "electron-builder": "latest"
   },
   "overrides": {
-    "tar": "^7.5.4",
-    "@electron/rebuild": "3.7.2"
+    "tar": "*",
+    "@tootallnate/once": "*",
+    "http-proxy-agent": "*",
+    "@electron/rebuild": "*"
   }
 }

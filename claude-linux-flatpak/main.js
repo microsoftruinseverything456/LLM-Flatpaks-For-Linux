@@ -40,7 +40,9 @@ const ALLOWED_HOSTS = [
   'anthropic.com',
   'cloudflare.com',
   'claudeusercontent.com',
-  'cloudflareinsights.com'
+  'cloudflareinsights.com',
+  'claudemcpcontent.com',
+  'claude.com'
 ];
 
 function isAllowed(urlString) {

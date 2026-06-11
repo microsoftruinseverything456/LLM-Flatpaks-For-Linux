@@ -136,10 +136,16 @@ build_and_install_flatpak() {
   # Clean previous dist
   rm -rf dist
 
-  echo "Building Flatpak (using system /tmp for intermediates)..."
+  # /tmp is a tmpfs and is often too small for Electron builds (the unpacked app
+  # alone is ~300 MB and flatpak-bundler copies it twice).  Use a directory under
+  # $HOME where space is plentiful, and clean it up afterwards regardless of outcome.
+  local BUILD_TMP="$HOME/.cache/claude-flatpak-tmp"
+  mkdir -p "$BUILD_TMP"
+  trap 'rm -rf "$BUILD_TMP"' EXIT
 
-  # No custom TMPDIR — uses default /tmp
-  env DEBUG="@malept/flatpak-bundler" \
+  echo "Building Flatpak (intermediates in $BUILD_TMP)..."
+
+  env DEBUG="@malept/flatpak-bundler" TMPDIR="$BUILD_TMP" \
     npx electron-builder --linux flatpak
 
   local FP_PATH

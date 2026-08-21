@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>Prompt</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 16px 18px;
+      background: #1b1b22;
+      color: #e6e6ef;
+      font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      user-select: none;
+    }
+    #msg {
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 96px;
+      overflow: auto;
+    }
+    #val {
+      width: 100%;
+      padding: 9px 11px;
+      border: 1px solid #3a3a47;
+      border-radius: 7px;
+      background: #11111a;
+      color: #f2f2f8;
+      font: inherit;
+      outline: none;
+    }
+    #val:focus { border-color: #6f6fe0; box-shadow: 0 0 0 2px rgba(111,111,224,0.25); }
+    .row {
+      margin-top: auto;
+      display: flex;
+      justify-content: flex-end;
+      gap: 9px;
+    }
+    button {
+      padding: 8px 16px;
+      border: 1px solid #3a3a47;
+      border-radius: 7px;
+      background: #2a2a34;
+      color: #e6e6ef;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover { background: #33333f; }
+    button.primary {
+      background: #5b5be0;
+      border-color: #5b5be0;
+      color: #fff;
+      font-weight: 600;
+    }
+    button.primary:hover { background: #6a6aee; }
+  </style>
+</head>
+<body>
+  <div id="msg"></div>
+  <input id="val" type="text" autocomplete="off" spellcheck="false">
+  <div class="row">
+    <button id="cancel" type="button">Cancel</button>
+    <button id="ok" type="button" class="primary">OK</button>
+  </div>
+
+  <script src="prompt.js"></script>
+</body>
+</html>

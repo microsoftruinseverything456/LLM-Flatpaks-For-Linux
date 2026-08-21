@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Local-only UI: no remote resources at all. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { height: 100%; overflow: hidden; background: #101016; }
+/* The bar fills the whole view (34px tall, see DOWNLOAD_BAR_HEIGHT in main.js),
+   pinned to the bottom of the window above the tab views. */
+body {
+  height: 34px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: #101016;
+  color: #d8d8e8;
+  font: 500 12px/1 system-ui, sans-serif;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  -webkit-user-select: none;
+  user-select: none;
+}
+#list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+#list::-webkit-scrollbar { display: none; }
+.chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  max-width: 300px;
+  height: 24px;
+  padding: 0 6px 0 10px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1b1b22;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+/* Progress fill sits behind the chip's content. */
+.chip .fill {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: 0;
+  background: linear-gradient(90deg, rgba(79,158,255,0.30), rgba(167,139,250,0.30));
+  transition: width 0.2s linear;
+  pointer-events: none;
+}
+/* Unknown total size — sweep an indeterminate bar so it's clearly active. */
+.chip .fill.indet {
+  width: 40%;
+  transition: none;
+  animation: indet 1.2s ease-in-out infinite;
+}
+@keyframes indet {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(275%); }
+}
+.chip.done .fill, .chip.failed .fill { display: none; }
+.chip > *:not(.fill) { position: relative; z-index: 1; }
+.chip .name {
+  min-width: 0;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip .status {
+  flex: none;
+  color: #8f8fa3;
+  font-variant-numeric: tabular-nums;
+}
+.chip .status:empty { display: none; }
+.chip.done  { cursor: pointer; }
+.chip.done .status  { color: #4fd18b; }
+.chip.failed .status { color: #ff6b6b; }
+.chip.stalled .status { color: #e0a44f; }
+.chip.done:hover { border-color: rgba(79,209,139,0.5); }
+.chip .close {
+  flex: none;
+  width: 16px; height: 16px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #8f8fa3;
+  font: 400 13px/1 system-ui;
+  cursor: pointer;
+}
+.chip .close:hover { background: rgba(255,255,255,0.14); color: #fff; }
+</style>
+</head>
+<body>
+<div id="list"></div>
+<script>
+const list = document.getElementById('list');
+// Reconcile the DOM in place (keyed by id) rather than rebuilding it every push.
+// Rebuilding on each progress tick would destroy the chip the user is trying to
+// click, so the × (cancel/dismiss) rarely landed while a download was active.
+const els = new Map(); // id -> { chip, fill, name, status, close }
+
+function makeChip(id) {
+  const chip = document.createElement('div');
+  chip.className = 'chip';
+
+  const fill = document.createElement('div'); fill.className = 'fill';
+  const name = document.createElement('span'); name.className = 'name';
+  const status = document.createElement('span'); status.className = 'status';
+  const close = document.createElement('button'); close.className = 'close'; close.textContent = '×';
+  chip.append(fill, name, status, close);
+
+  // × cancels an in-progress download / dismisses a finished one (main decides).
+  close.addEventListener('click', (e) => { e.stopPropagation(); window.llDL.dismiss(id); });
+  // Clicking a completed chip opens its containing folder.
+  chip.addEventListener('click', (e) => {
+    if (e.target === close) return;
+    if (chip.classList.contains('done')) window.llDL.open(id);
+  });
+
+  const rec = { chip, fill, name, status, close };
+  els.set(id, rec);
+  return rec;
+}
+
+function fmtBytes(n) {
+  if (!n || n < 0) return '';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i > 0 && n < 10 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+}
+
+function update(rec, d) {
+  const done = d.state === 'completed';
+  const failed = d.state === 'failed';
+  const stalled = !done && !failed && d.stalled;
+  rec.name.textContent = d.filename || 'download';
+  rec.chip.classList.toggle('done', done);
+  rec.chip.classList.toggle('failed', failed);
+  rec.chip.classList.toggle('stalled', !!stalled);
+
+  if (done) {
+    rec.status.textContent = '✓';
+    rec.chip.title = 'Open containing folder';
+    rec.close.title = 'Dismiss';
+    rec.fill.classList.remove('indet');
+  } else if (failed) {
+    rec.status.textContent = 'failed';
+    rec.chip.title = '';
+    rec.close.title = 'Dismiss';
+    rec.fill.classList.remove('indet');
+  } else {
+    rec.chip.title = '';
+    rec.close.title = 'Cancel download';
+    if (stalled) {
+      // Lost the connection; the download is retrying in the background.
+      rec.fill.classList.add('indet');
+      rec.status.textContent = 'reconnecting…';
+    } else if (typeof d.pct === 'number') {
+      rec.fill.classList.remove('indet');
+      rec.fill.style.width = d.pct + '%';
+      rec.status.textContent = d.pct + '%';
+    } else {
+      // Unknown total size: animated sweep + downloaded-so-far byte count.
+      rec.fill.classList.add('indet');
+      rec.status.textContent = fmtBytes(d.received);
+    }
+  }
+}
+
+function render(state) {
+  const seen = new Set();
+  for (const d of state.items) {
+    seen.add(d.id);
+    let rec = els.get(d.id);
+    if (!rec) { rec = makeChip(d.id); list.appendChild(rec.chip); }
+    update(rec, d);
+  }
+  for (const [id, rec] of els) {
+    if (!seen.has(id)) { rec.chip.remove(); els.delete(id); }
+  }
+}
+
+window.llDL.onState(render);
+</script>
+</body>
+</html>

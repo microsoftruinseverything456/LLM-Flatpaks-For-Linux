@@ -4,15 +4,8 @@ These apps have extremely locked down permissions and an in-built firewall restr
 
 To install FlatSeal for permission adjustments, run "flatpak install flathub com.github.tchx84.Flatseal" without quotes, or find it in the Gnome Software app if applicable.
 
-Scripts included for installations, removals, and updates.
+Scripts included for installations, removals, and updates.  
 
-This is not (yet) available on Flathub. I'm still somewhat new to the Linux scene, and haven't gotten around to registering these with Gnome.
-  
-  
-  
-  
-  
-  
 To map one of these to a copilot key or similar AI keyboard shortcut, add one of the following to the command line for the keyboard shortcut in your OS settings:
 
 Claude:  

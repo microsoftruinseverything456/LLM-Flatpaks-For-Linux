@@ -1366,7 +1366,21 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
+  // The hide/show shortcut is a native WM keybinding that relaunches the
+  // executable, not something this app listens for directly — Electron's
+  // single-instance lock turns each relaunch into a 'second-instance' event
+  // here. Some WMs/compositors occasionally deliver two relaunches for one
+  // keypress (key-repeat, edge-bound shortcuts, D-Bus activation racing the
+  // exec), which would hide the window and then immediately un-hide it.
+  // Drop any relaunch that arrives within this window of the last one.
+  const SECOND_INSTANCE_DEBOUNCE_MS = 300;
+  let lastSecondInstanceAt = 0;
+
   app.on('second-instance', async () => {
+    const now = Date.now();
+    if (now - lastSecondInstanceAt < SECOND_INSTANCE_DEBOUNCE_MS) return;
+    lastSecondInstanceAt = now;
+
     // If focused/visible, interpret as "hide-to-background" gesture.
     if (win && !win.isDestroyed() && win.isVisible() && win.isFocused() && !win.isMinimized()) {
       const url = pageApi ? pageApi.collectState() : null;

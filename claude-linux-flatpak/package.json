@@ -1,6 +1,6 @@
 {
   "name": "Claude",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "description": "Unofficial Claude for Linux",
   "main": "main.js",
   "scripts": {

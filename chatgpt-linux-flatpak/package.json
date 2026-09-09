@@ -1,6 +1,6 @@
 {
   "name": "ChatGPT",
-  "version": "2.1.4",
+  "version": "2.1.5",
   "description": "Unofficial ChatGPT for Linux",
   "main": "main.js",
   "scripts": {

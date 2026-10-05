@@ -51,6 +51,9 @@ const ALLOWED_HOSTS = [
   'oaiusercontent.com',
   'oaistatic.com',
   'challenges.cloudflare.com',
+  'stripe.com',
+  'stripecdn.com',
+  'stripe.network'
 ];
 
 // Hosts allowed to ASK for camera / microphone / clipboard / fullscreen.

@@ -53,6 +53,7 @@ const ALLOWED_HOSTS = [
   'cloudflareinsights.com',
   'claudemcpcontent.com',
   'claude.com',
+  'hcaptcha.com',
 ];
 
 // Hosts allowed to ASK for camera / microphone / clipboard / fullscreen.

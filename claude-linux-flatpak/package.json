@@ -1,6 +1,6 @@
 {
   "name": "Claude",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Unofficial Claude for Linux",
   "main": "main.js",
   "scripts": {
@@ -14,6 +14,12 @@
     "npmRebuild": false,
     "appId": "io.github.microsoftruinseverything456.claude",
     "productName": "Claude",
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false
+    },
     "icon": "icon",
     "linux": {
       "target": [

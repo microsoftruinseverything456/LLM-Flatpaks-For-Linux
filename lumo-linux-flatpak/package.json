@@ -1,6 +1,6 @@
 {
   "name": "Lumo",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Unofficial Lumo for Linux",
   "main": "main.js",
   "scripts": {
@@ -15,8 +15,8 @@
     "appId": "io.github.microsoftruinseverything456.lumo",
     "productName": "Lumo",
     "electronFuses": {
-      "enableCookieEncryption": true,
       "runAsNode": false,
+      "enableCookieEncryption": true,
       "enableNodeOptionsEnvironmentVariable": false,
       "enableNodeCliInspectArguments": false
     },
@@ -56,7 +56,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^42.11.10",
+    "electron": "42.9.3",
     "electron-builder": "26.15.3"
   },
   "overrides": {
